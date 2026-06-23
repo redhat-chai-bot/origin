@@ -194,9 +194,36 @@ var _ = g.Describe("[sig-api-machinery][Feature:APIServer][Late]", func() {
 
 		if *controlPlaneTopology == configv1.ExternalTopologyMode {
 			mgmtClusterOC := exutil.NewHypershiftManagementCLI("default").AsAdmin().WithoutNamespace()
-			pods, err := mgmtClusterOC.KubeClient().CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{LabelSelector: "hypershift.openshift.io/control-plane-component=kube-apiserver"})
+
+			// Scope KAS pod listing to the control plane namespace of the HostedCluster
+			// under test, rather than listing across all namespaces. Listing all namespaces
+			// picks up pods from other concurrent jobs' HostedClusters, causing failures if
+			// any pod from another cluster is not ready. See OCPBUGS-91633.
+			_, controlPlaneNamespace, err := exutil.GetHypershiftManagementClusterConfigAndNamespace()
+			o.Expect(err).NotTo(o.HaveOccurred(), "failed to get HyperShift management cluster namespace")
+
+			pods, err := mgmtClusterOC.KubeClient().CoreV1().Pods(controlPlaneNamespace).List(context.TODO(), metav1.ListOptions{LabelSelector: "hypershift.openshift.io/control-plane-component=kube-apiserver"})
 			o.Expect(err).To(o.BeNil())
 			for _, pod := range pods.Items {
+				// Skip pods that are not in Running phase or have containers that are
+				// not ready. Even within the correct namespace a pod could be transiently
+				// initializing during a rollout.
+				if pod.Status.Phase != "Running" {
+					klog.Warningf("Skipping KAS pod %s/%s: pod phase is %s, not Running", pod.Namespace, pod.Name, pod.Status.Phase)
+					continue
+				}
+				allContainersReady := true
+				for _, cs := range pod.Status.ContainerStatuses {
+					if !cs.Ready {
+						allContainersReady = false
+						break
+					}
+				}
+				if !allContainersReady {
+					klog.Warningf("Skipping KAS pod %s/%s: not all containers are ready", pod.Namespace, pod.Name)
+					continue
+				}
+
 				fileName, err := mgmtClusterOC.Run("logs", "-n", pod.Namespace, pod.Name, "-c", "audit-logs").OutputToFile(pod.Name + "-audit.log")
 				o.Expect(err).NotTo(o.HaveOccurred())
 				reader, err := os.Open(fileName)
