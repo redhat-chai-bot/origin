@@ -52,7 +52,8 @@ func Test_OverlapMatcherUsesFirstTimestamp(t *testing.T) {
 		"event should be allowed when firstTimestamp falls within the overlap interval")
 
 	// Now test with a test interval that ends before lastTimestamp but after firstTimestamp.
-	// The event's firstTimestamp (12:15) is within [12:00, 13:00], and To (13:45:01) is NOT.
+	// The event's firstTimestamp (12:15) is within [12:00, 13:00], and To (13:45:01) is NOT,
+	// but the intervals still overlap so the event should be allowed.
 	shorterTestInterval := monitorapi.NewInterval(monitorapi.SourceE2ETest, monitorapi.Info).
 		Locator(monitorapi.NewLocator().NodeFromName("test")).
 		Message(monitorapi.NewMessage().HumanMessage("short test interval")).
@@ -66,9 +67,10 @@ func Test_OverlapMatcherUsesFirstTimestamp(t *testing.T) {
 		allowIfWithinIntervals: monitorapi.Intervals{shorterTestInterval},
 	}
 
-	// Should NOT be allowed because the event's To (13:45:01) extends past the test interval's end (13:00).
-	assert.False(t, matcherShort.Allows(pathologicalInterval, v1.HighlyAvailableTopologyMode),
-		"event should not be allowed when its To extends beyond the overlap interval")
+	// Should be allowed because the intervals overlap: event [12:15, 13:45:01] and test [12:00, 13:00]
+	// share the range [12:15, 13:00].
+	assert.True(t, matcherShort.Allows(pathologicalInterval, v1.HighlyAvailableTopologyMode),
+		"event should be allowed when it overlaps with the test interval")
 
 	// Test without firstTimestamp annotation — should fall back to From (lastTimestamp).
 	noAnnotationInterval := monitorapi.NewInterval(monitorapi.SourceKubeEvent, monitorapi.Warning).

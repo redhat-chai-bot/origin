@@ -1021,14 +1021,14 @@ func newFailedSchedulingDuringNodeUpdatePathologicalEventMatcher(finalIntervals 
 }
 
 // OverlapOtherIntervalsPathologicalEventMatcher is an implementation containing a regular
-// matcher, plus additional logic that will allow the event only if it is contained
-// within another set of intervals provided. (i.e. used to allow FailedScheduling pathological
-// events if they are contained within NodeUpdate intervals)
+// matcher, plus additional logic that will allow the event only if it overlaps
+// with another set of intervals provided. (i.e. used to allow FailedScheduling pathological
+// events if they overlap with NodeUpdate intervals)
 type OverlapOtherIntervalsPathologicalEventMatcher struct {
 	// delegate is a normal event matcher.
 	delegate *SimplePathologicalEventMatcher
 	// allowIfWithinIntervals is the list of intervals that the incoming pathological event will
-	// match if it contained within one of these.
+	// match if it overlaps with one of these.
 	allowIfWithinIntervals monitorapi.Intervals
 }
 
@@ -1057,9 +1057,10 @@ func (ade *OverlapOtherIntervalsPathologicalEventMatcher) Allows(i monitorapi.In
 		}
 	}
 
-	// Match the pathological event if it overlaps with any of the given set of intervals.
+	// Allow the pathological event if it overlaps with any of the given set of intervals.
+	// Two intervals overlap iff one starts before the other ends and vice versa.
 	for _, nui := range ade.allowIfWithinIntervals {
-		if nui.From.Before(eventFrom) && nui.To.After(i.To) {
+		if nui.From.Before(i.To) && nui.To.After(eventFrom) {
 			logrus.Infof("%s was found to overlap with %s, ignoring pathological event as they fall within range of specified intervals", i, nui)
 			return true
 		}
