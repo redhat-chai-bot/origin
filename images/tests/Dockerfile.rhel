@@ -5,7 +5,7 @@ RUN make; \
     mkdir -p /tmp/build; \
     cp /go/src/github.com/openshift/origin/openshift-tests /tmp/build/openshift-tests
 
-FROM registry.ci.openshift.org/ocp/5.0:tools
+FROM quay-proxy.ci.openshift.org/openshift/ci:ocp_5.0_tools
 COPY --from=builder /tmp/build/openshift-tests /usr/bin/
 
 RUN PACKAGES="git gzip util-linux" && \
