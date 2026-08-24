@@ -544,8 +544,10 @@ func NewUniversalPathologicalEventMatchers(kubeConfig *rest.Config, finalInterva
 
 	singleNodeConnectionRefusedMatcher := newSingleNodeConnectionRefusedEventMatcher(finalIntervals)
 	singleNodeKubeAPIServerProgressingMatcher := newSingleNodeKubeAPIProgressingEventMatcher(finalIntervals)
+	singleNodeMachineConfigNodeFailedMatcher := newSingleNodeMachineConfigNodeFailedEventMatcher()
 	registry.AddPathologicalEventMatcherOrDie(singleNodeConnectionRefusedMatcher)
 	registry.AddPathologicalEventMatcherOrDie(singleNodeKubeAPIServerProgressingMatcher)
+	registry.AddPathologicalEventMatcherOrDie(singleNodeMachineConfigNodeFailedMatcher)
 
 	vsphereConfigurationTestsRollOutTooOftenMatcher := newVsphereConfigurationTestsRollOutTooOftenEventMatcher(finalIntervals)
 	registry.AddPathologicalEventMatcherOrDie(vsphereConfigurationTestsRollOutTooOftenMatcher)
@@ -1215,6 +1217,24 @@ func newSingleNodeKubeAPIProgressingEventMatcher(finalIntervals monitorapi.Inter
 			topology:          &snoTopology,
 		},
 		allowIfWithinIntervals: ocpKubeAPIServerProgressingInterval,
+	}
+}
+
+// On single node, an upgrade reboots the only control-plane node, so the API server is unreachable
+// while it comes back. The machine-config daemon's resync loop keeps retrying during that window and
+// emits a MachineConfigNodeFailed event each time it can't reach the API, which can exceed our
+// pathological event threshold (observed 26-28 repeats). Allow these on single node topology.
+func newSingleNodeMachineConfigNodeFailedEventMatcher() EventMatcher {
+	snoTopology := v1.SingleReplicaTopologyMode
+	return &SimplePathologicalEventMatcher{
+		name: "MachineConfigNodeFailedDuringSingleNodeUpgrade",
+		locatorKeyRegexes: map[monitorapi.LocatorKey]*regexp.Regexp{
+			monitorapi.LocatorNamespaceKey: regexp.MustCompile(`^openshift-machine-config-operator$`),
+		},
+		messageReasonRegex:      regexp.MustCompile(`^MachineConfigNodeFailed$`),
+		messageHumanRegex:       regexp.MustCompile(`Failed to resync.*connection refused`),
+		topology:                &snoTopology,
+		repeatThresholdOverride: 40,
 	}
 }
 
