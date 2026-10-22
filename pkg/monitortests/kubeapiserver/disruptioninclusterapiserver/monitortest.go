@@ -544,6 +544,23 @@ func (i *InvariantInClusterDisruption) StartCollection(ctx context.Context, admi
 		return nil
 	}
 
+	// Skip disruption API server monitoring on s390x clusters.
+	// The openshift-tests image lacks an s390x manifest, causing
+	// ImagePullBackOff on all disruption poller pods (OCPBUGS-131832).
+	{
+		archNodes, archErr := i.kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if archErr == nil && len(archNodes.Items) > 0 {
+			nodeArch := archNodes.Items[0].Status.NodeInfo.Architecture
+			if nodeArch == "s390x" {
+				i.notSupportedReason = fmt.Sprintf(
+					"disruption API server monitoring skipped: openshift-tests image missing %s manifest (OCPBUGS-131832)",
+					nodeArch)
+				log.Infof("%s", i.notSupportedReason)
+				return nil
+			}
+		}
+	}
+
 	// Replace namespace from earlier test
 	if err := i.removeExistingMonitorNamespaces(ctx); err != nil {
 		log.Infof("removeExistingMonitorNamespaces returned error %v", err)

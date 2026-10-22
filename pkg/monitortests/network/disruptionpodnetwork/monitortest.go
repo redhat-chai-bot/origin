@@ -110,6 +110,24 @@ func (pna *podNetworkAvalibility) PrepareCollection(ctx context.Context, adminRE
 		return err
 	}
 
+	// Skip disruption pod network monitoring on s390x clusters.
+	// The openshift-tests image lacks an s390x manifest, causing
+	// ImagePullBackOff on all disruption poller pods (OCPBUGS-131832).
+	{
+		archNodes, archErr := pna.kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if archErr == nil && len(archNodes.Items) > 0 {
+			nodeArch := archNodes.Items[0].Status.NodeInfo.Architecture
+			if nodeArch == "s390x" {
+				pna.notSupportedReason = &monitortestframework.NotSupportedError{
+					Reason: fmt.Sprintf(
+						"disruption pod network monitoring skipped: openshift-tests image missing %s manifest (OCPBUGS-131832)",
+						nodeArch),
+				}
+				return pna.notSupportedReason
+			}
+		}
+	}
+
 	var actualNamespace *corev1.Namespace
 	if err := utility.RetryWithExponentialBackoff(ctx, func() error {
 		var createErr error
