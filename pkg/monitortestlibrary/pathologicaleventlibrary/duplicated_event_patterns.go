@@ -1088,42 +1088,37 @@ type OverlapOtherIntervalsPathologicalEventMatcher struct {
 }
 
 // eventObservation identifies one observed revision of a repeating Kubernetes Event: which
-// Event object (eventObjectKey), when its latest occurrence happened (From, second precision)
-// and the cumulative count it reported at that point.
+// Event object UID, when its latest occurrence happened (From, second precision), and the
+// cumulative count it reported at that point.
 type eventObservation struct {
 	event string
 	from  int64
 	count int
 }
 
-func newEventObservation(i monitorapi.Interval) eventObservation {
+func newEventObservation(i monitorapi.Interval) (eventObservation, bool) {
+	event, ok := eventObjectKey(i)
+	if !ok {
+		return eventObservation{}, false
+	}
 	return eventObservation{
-		event: eventObjectKey(i),
+		event: event,
 		from:  i.From.Unix(),
 		count: GetTimesAnEventHappened(i.Message),
-	}
+	}, true
 }
 
-// eventObjectKey identifies the Kubernetes Event object an interval is an observation of. The
-// message cannot be part of it: the Event recorder aggregates similar events into a single
-// object ("(combined from similar events): ...") whose message, and therefore hmsg, changes on
-// every update while its count keeps accumulating, as happens for ScalingReplicaSet. The
-// object's firstTimestamp stays fixed for its whole lifetime and changes if it is recreated.
-func eventObjectKey(i monitorapi.Interval) string {
-	firstTimestamp, ok := i.Message.Annotations["firstTimestamp"]
-	if !ok {
-		// Without it the object cannot be told apart from other events with the same reason
-		// on the same resource, so fall back to the exact message.
-		return fmt.Sprintf("%s - reason/%s %s", i.Locator.OldLocator(), i.Message.Reason, i.Message.HumanMessage)
+// eventObjectKey identifies the Kubernetes Event object an interval observes. The Event UID is
+// independent of its message: client-go aggregates similar events into a single object whose
+// message (and therefore hmsg) changes while its count keeps accumulating. Older intervals lack
+// the UID; no identity is inferred for them because resource/reason/timestamp can collide across
+// independent Event objects, so they are conservatively ineligible for shared discounts.
+func eventObjectKey(i monitorapi.Interval) (string, bool) {
+	uid := i.Message.Annotations[monitorapi.AnnotationKubeEventUID]
+	if len(uid) == 0 {
+		return "", false
 	}
-	locator := i.Locator
-	locator.Keys = map[monitorapi.LocatorKey]string{}
-	for k, v := range i.Locator.Keys {
-		if k != monitorapi.LocatorHmsgKey {
-			locator.Keys[k] = v
-		}
-	}
-	return fmt.Sprintf("%s - reason/%s firstTimestamp/%s", locator.OldLocator(), i.Message.Reason, firstTimestamp)
+	return uid, true
 }
 
 // discountInWindowOccurrences replays every observation of the events this matcher's delegate
@@ -1146,7 +1141,10 @@ func (ade *OverlapOtherIntervalsPathologicalEventMatcher) discountInWindowOccurr
 		if i.Source != monitorapi.SourceKubeEvent || !ade.delegate.Matches(i) {
 			continue
 		}
-		key := eventObjectKey(i)
+		key, ok := eventObjectKey(i)
+		if !ok {
+			continue
+		}
 		observationsByEvent[key] = append(observationsByEvent[key], i)
 	}
 
@@ -1173,7 +1171,10 @@ func (ade *OverlapOtherIntervalsPathologicalEventMatcher) discountInWindowOccurr
 				inWindow += increment
 			}
 			previous, previousCount = &observations[idx], count
-			ade.inWindowOccurrences[newEventObservation(observation)] = inWindow
+			key, ok := newEventObservation(observation)
+			if ok {
+				ade.inWindowOccurrences[key] = inWindow
+			}
 		}
 	}
 }
@@ -1236,7 +1237,11 @@ func (ade *OverlapOtherIntervalsPathologicalEventMatcher) Allows(i monitorapi.In
 	if ade.inWindowOccurrences == nil {
 		return false
 	}
-	inWindow := ade.inWindowOccurrences[newEventObservation(i)]
+	observation, ok := newEventObservation(i)
+	if !ok {
+		return false
+	}
+	inWindow := ade.inWindowOccurrences[observation]
 	if inWindow > 0 && GetTimesAnEventHappened(i.Message)-inWindow <= DuplicateEventThreshold {
 		logrus.Infof("%s repeated %d times outside the allowed intervals of %s, ignoring pathological event",
 			i, GetTimesAnEventHappened(i.Message)-inWindow, ade.Name())

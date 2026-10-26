@@ -109,6 +109,9 @@ func recordAddOrUpdateEvent(
 	}
 
 	message := monitorapi.NewMessage().HumanMessage(obj.Message)
+	if len(obj.UID) > 0 {
+		message = message.WithAnnotation(monitorapi.AnnotationKubeEventUID, string(obj.UID))
+	}
 	if obj.Count > 1 {
 		message = message.WithAnnotation(monitorapi.AnnotationCount, fmt.Sprintf("%d", obj.Count))
 	}

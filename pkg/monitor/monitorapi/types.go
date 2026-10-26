@@ -314,6 +314,9 @@ const (
 	AnnotationPriority         AnnotationKey = "priority"
 	AnnotationPreviousPriority AnnotationKey = "prev-priority"
 	AnnotationVIP              AnnotationKey = "vip"
+
+	// AnnotationKubeEventUID identifies the corev1.Event object, not its involved object.
+	AnnotationKubeEventUID AnnotationKey = "event-uid"
 )
 
 // ConstructionOwner was originally meant to signify that an interval was derived from other intervals.

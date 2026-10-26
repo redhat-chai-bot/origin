@@ -401,6 +401,7 @@ func eventSeries(namespace, deployment, reason string, created time.Time, fromCo
 	for count := fromCount; count <= toCount; count++ {
 		at := start.Add(time.Duration(count-fromCount) * 5 * time.Second)
 		observation := oauthScaleEventNS(namespace, deployment, reason, count, at)
+		observation.Message.Annotations[monitorapi.AnnotationKubeEventUID] = fmt.Sprintf("%s/%s/%s/%d", namespace, deployment, reason, created.UnixNano())
 		observation.Message.Annotations["firstTimestamp"] = created.Format(time.RFC3339)
 		if varyMessage {
 			observation.Message.HumanMessage = fmt.Sprintf("(combined from similar events): Scaled up replica set oauth-openshift-%d from 0 to 3", count)
@@ -409,6 +410,103 @@ func eventSeries(namespace, deployment, reason string, created time.Time, fromCo
 		series = append(series, observation)
 	}
 	return series
+}
+
+func setEventSeriesIdentity(series monitorapi.Intervals, uid, message, hmsg string) monitorapi.Intervals {
+	for idx := range series {
+		if uid == "" {
+			delete(series[idx].Message.Annotations, monitorapi.AnnotationKubeEventUID)
+		} else {
+			series[idx].Message.Annotations[monitorapi.AnnotationKubeEventUID] = uid
+		}
+		series[idx].Message.HumanMessage = message
+		series[idx].Locator.Keys[monitorapi.LocatorHmsgKey] = hmsg
+	}
+	return series
+}
+
+func authenticationScalingJUnitFailed(events monitorapi.Intervals) bool {
+	evaluator := duplicateEventsEvaluator{registry: NewUniversalPathologicalEventMatchers(nil, events)}
+	name := getJUnitName("events should not repeat", "openshift-authentication")
+	for _, junit := range evaluator.testDuplicatedEvents("events should not repeat", false, events, nil, false) {
+		if junit.Name == name && junit.FailureOutput != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAuthenticationComponentProxy_EventUIDDiscountIdentity(t *testing.T) {
+	from := cpT0
+	to := from.Add(4 * time.Minute)
+	later := to.Add(authenticationComponentProxyPostTestGrace + time.Minute)
+	created := from.Add(-time.Hour)
+	testInterval := cpTestInterval(cpEligibleFullNames[0], "Passed", from, to)
+
+	t.Run("same UID preserves continuity when message and hmsg change", func(t *testing.T) {
+		inside := setEventSeriesIdentity(
+			aggregatedScalingSeries(created, 1, 12, from.Add(time.Minute)),
+			"uid-a", "inside message", "inside-hmsg",
+		)
+		outside := setEventSeriesIdentity(
+			aggregatedScalingSeries(created, 13, 30, later),
+			"uid-a", "outside message", "outside-hmsg",
+		)
+		events := append(monitorapi.Intervals{testInterval}, append(inside, outside...)...)
+		matcher := scalingMatcher(t, events)
+		assert.True(t, matcher.Allows(outside[len(outside)-1], v1.HighlyAvailableTopologyMode))
+		assert.False(t, authenticationScalingJUnitFailed(events))
+	})
+
+	for _, tc := range []struct {
+		name string
+		bUID string
+	}{
+		{name: "distinct UIDs with the same resource reason and firstTimestamp", bUID: "uid-b"},
+		{name: "mixed UID and missing UID observations", bUID: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aFirst := setEventSeriesIdentity(
+				aggregatedScalingSeries(created, 1, 1, created.Add(100*time.Millisecond)),
+				"uid-a", "event A", "hmsg-a",
+			)
+			bBefore := setEventSeriesIdentity(
+				aggregatedScalingSeries(created, 1, 20, created.Add(200*time.Millisecond)),
+				tc.bUID, "event B", "hmsg-b",
+			)
+			aInside := setEventSeriesIdentity(
+				aggregatedScalingSeries(created, 2, 12, from.Add(time.Minute)),
+				"uid-a", "event A changed", "hmsg-a-changed",
+			)
+			bLast := setEventSeriesIdentity(
+				aggregatedScalingSeries(created, 21, 21, later),
+				tc.bUID, "event B", "hmsg-b",
+			)
+			events := append(monitorapi.Intervals{testInterval}, aFirst...)
+			events = append(events, bBefore...)
+			events = append(events, aInside...)
+			events = append(events, bLast...)
+
+			matcher := scalingMatcher(t, events)
+			assert.False(t, matcher.Allows(bLast[0], v1.HighlyAvailableTopologyMode))
+			assert.True(t, authenticationScalingJUnitFailed(events))
+		})
+	}
+
+	t.Run("missing UID never earns a cross-observation discount", func(t *testing.T) {
+		inside := setEventSeriesIdentity(
+			aggregatedScalingSeries(created, 1, 12, from.Add(time.Minute)),
+			"", "legacy event inside", "legacy-inside",
+		)
+		outside := setEventSeriesIdentity(
+			aggregatedScalingSeries(created, 13, 21, later),
+			"", "legacy event outside", "legacy-outside",
+		)
+		events := append(monitorapi.Intervals{testInterval}, append(inside, outside...)...)
+		matcher := scalingMatcher(t, events)
+		assert.False(t, matcher.Allows(outside[len(outside)-1], v1.HighlyAvailableTopologyMode))
+		assert.True(t, authenticationScalingJUnitFailed(events))
+	})
 }
 
 // TestAuthenticationComponentProxy_DiscountsInWindowOccurrences pins that occurrences of an Event

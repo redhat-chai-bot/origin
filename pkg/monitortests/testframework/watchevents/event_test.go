@@ -43,8 +43,9 @@ func Test_recordAddOrUpdateEvent(t *testing.T) {
 				ctx: context.TODO(),
 				m:   monitor.NewRecorder(),
 				kubeEvent: &corev1.Event{
-					Count:  2,
-					Reason: "SomethingHappened",
+					ObjectMeta: metav1.ObjectMeta{UID: "event-uid"},
+					Count:      2,
+					Reason:     "SomethingHappened",
 					InvolvedObject: corev1.ObjectReference{
 						Kind:      "Pod",
 						Namespace: "openshift-authentication",
@@ -65,6 +66,7 @@ func Test_recordAddOrUpdateEvent(t *testing.T) {
 			},
 			expectedMessage: monitorapi.NewMessage().Reason("SomethingHappened").
 				HumanMessage("sample message").WithAnnotation(monitorapi.AnnotationCount, "2").
+				WithAnnotation(monitorapi.AnnotationKubeEventUID, "event-uid").
 				WithAnnotation("firstTimestamp", first.Format(time.RFC3339)).
 				WithAnnotation("lastTimestamp", now.Format(time.RFC3339)).
 				Build(),
